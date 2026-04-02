@@ -1,132 +1,148 @@
-# Business Copilot — Monolith Backend
+# Business Copilot — Backend
 
-This is the backend repository for the **Business Copilot** project. It is built using a modern Node.js and TypeScript stack, focusing on a single-process, single-codebase, single-deployment monolith architecture. 
+The monolith backend powering **Business Copilot** — an AI-driven platform for Finance, CRM, Marketing, Hiring, Voice, and Reseller operations. Built for multi-tenant enterprise use with a single process, single codebase, single deployment philosophy.
 
-It integrates Finance, CRM, Marketing, Hiring, Voice, and Reseller modules securely using PostgreSQL Row Level Security (RLS) under a multi-tenant model.
+---
 
-## 🚀 Architecture Overview
+## Architecture Overview
 
-- **Architecture Style**: Monolith — one Node.js process, one codebase, one deploy
-- **Runtime**: Node.js 20+ with TypeScript (`tsx` / `ts-node`)
-- **Framework**: Express.js — single app instance
-- **Database**: PostgreSQL 16 (Neon) with Drizzle ORM + Row Level Security
-- **In-Process ML**: Python workers called via `child_process.spawn()`
-- **Background Jobs**: BullMQ workers registered inside the same process
-- **Scheduler**: `node-cron`
-- **Authentication**: Clerk JWT with automated tenant provisioning
-- **AI Core**: Agent ReAct Loop integrating Claude Sonnet (Primary) and Kimi K2 (Fallback)
+| Layer | Technology |
+|---|---|
+| Runtime | Node.js 20+ · TypeScript (`tsx`) |
+| Framework | Express.js |
+| Database | PostgreSQL 16 (Neon) · Drizzle ORM · RLS |
+| Auth | Clerk JWT + automated tenant provisioning |
+| AI Core | ReAct loop · Claude Sonnet (primary) · Kimi K2 (fallback) |
+| Background Jobs | BullMQ (in-process workers) |
+| Scheduler | `node-cron` |
+| ML | Python 3.11+ scripts via `child_process.spawn()` |
 
-## 📁 Repository Structure
+Everything runs in a single Node.js process — no service mesh, no inter-service HTTP calls, no distributed overhead.
+
+---
+
+## Repository Structure
 
 ```text
 server/
-├── index.ts                  # App entry point; starts Express + workers + scheduler
-├── app.ts                    # Express config, middleware stack, route mounting
-├── db/                       # Drizzle setup, schema definitions, and migrations
-├── middleware/               # Auth, tenant RLS injector, rate limiter, cost tracker
-├── modules/                  # Domains (agent, finance, crm, marketing, voice, reseller)
-├── workers/                  # BullMQ processor registration and worker logic
-├── scheduler/                # node-cron job registry
-├── ml/                       # Python scripts (Prophet, scikit-learn) & spawn runner
-├── lib/                      # Core clients (LLM, Redis, Pinecone, R2, etc.)
-└── webhooks/                 # Event receivers (Stripe, Clerk, WhatsApp, Twilio)
+├── index.ts          # Entry point — starts Express, workers, and scheduler
+├── app.ts            # Express config, middleware stack, route mounting
+├── db/               # Drizzle schema definitions, migrations, and client setup
+├── middleware/       # Auth, tenant RLS injector, rate limiter, cost tracker
+├── modules/          # Domain logic (agent, finance, crm, marketing, voice, reseller)
+├── workers/          # BullMQ processor registration and job handlers
+├── scheduler/        # node-cron job registry
+├── ml/               # Python ML scripts (Prophet, scikit-learn) + spawn runner
+├── lib/              # Core clients — LLM, Redis, Pinecone, Cloudflare R2
+└── webhooks/         # Inbound event handlers — Stripe, Clerk, WhatsApp, Twilio
 ```
 
-## 🛠️ Getting Started
+---
+
+## Getting Started
 
 ### Prerequisites
 
-- **Node.js**: v20+
-- **Python**: 3.11+ (for internal ML scripts)
-- **PostgreSQL**: 16+ (Local or Neon)
-- **Redis Server**: Local or Upstash
+- **Node.js** v20+
+- **Python** 3.11+ *(for ML modules)*
+- **PostgreSQL** 16+ *(local or [Neon](https://neon.tech))*
+- **Redis** *(local or [Upstash](https://upstash.com))*
 
-### 1. Installation
-
-Clone the repository and install Node and Python dependencies.
+### 1. Install Dependencies
 
 ```bash
-# Install Node dependencies
+# Node dependencies
 npm install
 
-# Install Python dependencies for ML modules
+# Python dependencies for ML modules
 pip3 install -r server/ml/requirements.txt
 ```
 
-### 2. Environment Variables
-
-Copy the provided example environment file to create your own configuration:
+### 2. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Ensure all keys are populated, especially:
-- `DATABASE_URL` for PostgreSQL
-- `REDIS_URL` for BullMQ & Caching
-- `CLERK_SECRET_KEY` for Authentication
-- `ANTHROPIC_API_KEY` for the AI Agent
+Populate all required keys — the critical ones are:
 
-### 3. Database Setup
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Neon / PostgreSQL connection string |
+| `REDIS_URL` | BullMQ queue and caching layer |
+| `CLERK_SECRET_KEY` | JWT verification and tenant provisioning |
+| `ANTHROPIC_API_KEY` | Claude Sonnet for the AI agent core |
 
-Set up your database schema using Drizzle ORM. Row Level Security requires migrations to be applied properly.
+### 3. Set Up the Database
+
+Drizzle ORM manages all schema and migrations. RLS policies are applied as part of the migration process.
 
 ```bash
-# Generate SQL migrations from Drizzle schemas
+# Generate SQL migrations from your Drizzle schema
 npm run db:generate
 
-# Apply pending Drizzle migrations
+# Apply all pending migrations
 npm run db:migrate
-
-# Alternatively, push schema directly to the database (for prototyping)
-npm run db:push
 ```
 
-### 4. Running the Application
+> **Prototyping only:** Use `npm run db:push` to push schema changes directly without generating migration files.
 
-Start the application in development mode:
+### 4. Start the Server
 
 ```bash
+# Development (watch mode)
 npm run dev
+
+# Production
+npm run build && npm run start
 ```
 
-For production deployment:
+---
 
-```bash
-npm run build
-npm run start
-```
+## AI Agent Core
 
-## 🧠 AI Agent Core
+The agent lives in `server/modules/agent/` and runs a **ReAct (Reason + Act) loop** entirely in-process.
 
-The agent uses a **ReAct loop** located in `server/modules/agent/`. It runs completely in-process. 
-- Over 40+ direct memory function tools are registered across domains (Finance, CRM, Schedule, etc.).
-- There are no HTTP hop limitations for internal tool executions. 
-- Real-time SSE streaming yields output immediately.
+- **40+ registered tools** spanning Finance, CRM, Scheduling, and more
+- **No HTTP hop overhead** — all tool calls are direct in-memory function calls
+- **Real-time output** via Server-Sent Events (SSE) streaming
+- **Automatic fallback** — switches from Claude Sonnet to Kimi K2 on failure or rate limits
 
-## 🔐 Multi-Tenancy & Security
+---
 
-We enforce multi-tenancy strictly at the database level using PostgreSQL **Row Level Security (RLS)**.
-- `app.current_tenant` is automatically injected by the `tenantMiddleware` per connection pool session.
-- Database queries do not require manual application-level `WHERE tenant_id = ?` clauses.
-- API requests are protected via Clerk JWT verification and a strict tenant ID resolution flow.
+## Multi-Tenancy & Security
 
-## ⚙️ Available Scripts
+Tenant isolation is enforced at the **database level** using PostgreSQL Row Level Security (RLS) — not at the application layer.
 
-- `npm run dev`: Starts the server in watch mode using `tsx`.
-- `npm run start`: Runs the server post-build.
-- `npm run build`: Compiles the TypeScript codebase.
-- `npm run db:generate`: Generates SQL migrations.
-- `npm run db:migrate`: Applies SQL migrations.
-- `npm run db:push`: Pushes schema directly.
-- `npm run db:studio`: Opens Drizzle Studio for visual database inspection.
+- `tenantMiddleware` automatically injects `app.current_tenant` into each connection pool session
+- All queries are automatically scoped to the active tenant — no manual `WHERE tenant_id = ?` needed
+- Every API request is gated by Clerk JWT verification before the tenant ID is resolved
 
-## 🚢 Deployment
+This means a misconfigured query cannot leak cross-tenant data by design.
 
-The entire backend requires only one deployable unit and one `Dockerfile`. 
-Recommended infrastructure:
-- **Compute**: Railway, Render, or Fly.io
-- **Database**: Neon (Serverless Postgres)
-- **Redis**: Upstash
-- **Storage**: Cloudflare R2
-```
+---
+
+## Available Scripts
+
+| Script | Description |
+|---|---|
+| `npm run dev` | Start server in watch mode using `tsx` |
+| `npm run build` | Compile TypeScript to JavaScript |
+| `npm run start` | Run the compiled production server |
+| `npm run db:generate` | Generate SQL migration files from schema |
+| `npm run db:migrate` | Apply pending migrations to the database |
+| `npm run db:push` | Push schema directly (prototyping only) |
+| `npm run db:studio` | Open Drizzle Studio for visual DB inspection |
+
+---
+
+## Deployment
+
+The entire backend ships as **one deployable unit** with a single `Dockerfile`.
+
+| Service | Recommended Provider |
+|---|---|
+| Compute | [Railway](https://railway.app) · [Render](https://render.com) · [Fly.io](https://fly.io) |
+| Database | [Neon](https://neon.tech) — Serverless Postgres |
+| Redis | [Upstash](https://upstash.com) — Serverless Redis |
+| File Storage | [Cloudflare R2](https://developers.cloudflare.com/r2/) |
