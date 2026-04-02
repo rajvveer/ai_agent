@@ -11,7 +11,7 @@ The monolith backend powering **Business Copilot** — an AI-driven platform for
 | Runtime | Node.js 20+ · TypeScript (`tsx`) |
 | Framework | Express.js |
 | Database | PostgreSQL 16 (Neon) · Drizzle ORM · RLS |
-| Auth | Clerk JWT + automated tenant provisioning |
+| Auth | Custom JWT · Email & Phone OTP · 2FA · Google OAuth 2.0 |
 | AI Core | ReAct loop · Claude Sonnet (primary) · Kimi K2 (fallback) |
 | Background Jobs | BullMQ (in-process workers) |
 | Scheduler | `node-cron` |
@@ -34,7 +34,7 @@ server/
 ├── scheduler/        # node-cron job registry
 ├── ml/               # Python ML scripts (Prophet, scikit-learn) + spawn runner
 ├── lib/              # Core clients — LLM, Redis, Pinecone, Cloudflare R2
-└── webhooks/         # Inbound event handlers — Stripe, Clerk, WhatsApp, Twilio
+└── webhooks/         # Inbound event handlers — Stripe, WhatsApp, Twilio
 ```
 
 ---
@@ -70,7 +70,12 @@ Populate all required keys — the critical ones are:
 |---|---|
 | `DATABASE_URL` | Neon / PostgreSQL connection string |
 | `REDIS_URL` | BullMQ queue and caching layer |
-| `CLERK_SECRET_KEY` | JWT verification and tenant provisioning |
+| `JWT_SECRET` | Signing secret for custom JWT issuance |
+| `JWT_REFRESH_SECRET` | Signing secret for refresh token rotation |
+| `GOOGLE_CLIENT_ID` | Google OAuth 2.0 client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 client secret |
+| `OTP_PROVIDER_KEY` | SMS/email OTP delivery provider API key |
+| `TOTP_SECRET_SALT` | Salt for seeding per-user 2FA TOTP secrets |
 | `ANTHROPIC_API_KEY` | Claude Sonnet for the AI agent core |
 
 ### 3. Set Up the Database
@@ -110,13 +115,37 @@ The agent lives in `server/modules/agent/` and runs a **ReAct (Reason + Act) loo
 
 ---
 
+## Authentication
+
+Authentication is fully self-hosted with no third-party auth provider dependency.
+
+### Supported Methods
+
+| Method | Flow |
+|---|---|
+| **Email + Password** | Custom JWT issued on credential verification |
+| **Phone OTP** | SMS one-time password → JWT on verification |
+| **Email OTP** | Magic-link / OTP email → JWT on verification |
+| **Google OAuth 2.0** | OAuth code exchange → JWT issued internally |
+| **Two-Factor Auth (2FA)** | TOTP (authenticator app) enforced as a second step |
+
+### Token Strategy
+
+- **Access Token** — short-lived JWT (15 min), signed with `JWT_SECRET`, carries `tenantId` + `userId` + `role`
+- **Refresh Token** — long-lived (7 days), stored server-side in Redis, rotated on every use
+- **2FA Step Token** — intermediate short-lived token issued after primary auth passes, exchanged for an access token only after TOTP verification
+
+All tokens are verified in `server/middleware/auth.ts` before any route handler executes.
+
+---
+
 ## Multi-Tenancy & Security
 
 Tenant isolation is enforced at the **database level** using PostgreSQL Row Level Security (RLS) — not at the application layer.
 
-- `tenantMiddleware` automatically injects `app.current_tenant` into each connection pool session
+- `tenantMiddleware` automatically injects `app.current_tenant` into each connection pool session from the verified JWT
 - All queries are automatically scoped to the active tenant — no manual `WHERE tenant_id = ?` needed
-- Every API request is gated by Clerk JWT verification before the tenant ID is resolved
+- API requests are rejected at the auth middleware before the tenant ID is ever resolved if the JWT is invalid or expired
 
 This means a misconfigured query cannot leak cross-tenant data by design.
 
