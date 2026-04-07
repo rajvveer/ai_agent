@@ -6,8 +6,18 @@ import {
   timestamp,
   jsonb,
   boolean,
+  integer,
 } from 'drizzle-orm/pg-core';
 import { tenants } from './core.js';
+
+export const cashflowForecasts = pgTable('cashflow_forecasts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  periodDays: integer('period_days').notNull(), // 30, 60, 90
+  forecast: jsonb('forecast').notNull(),        // Array of {ds, yhat, yhat_lower, yhat_upper}
+  generatedAt: timestamp('generated_at', { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
 
 // ─── Bank Accounts ─────────────────────────────────────
 export const bankAccounts = pgTable('bank_accounts', {

@@ -15,6 +15,7 @@ import { errorHandler } from './middleware/errors.js';
 import { authRouter } from './modules/auth/router.js';
 import { agentRouter } from './modules/agent/router.js';
 import { financeRouter } from './modules/finance/router.js';
+import { crmRouter } from './modules/crm/router.js';
 
 // Webhook router
 import { webhookRouter } from './webhooks/router.js';
@@ -62,7 +63,7 @@ app.use('/api/agent', agentRouter);
 
 // Placeholder routes for future phases
 app.use('/api/finance',    financeRouter);    // Phase 3
-// app.use('/api/crm',        crmRouter);        // Phase 3
+app.use('/api/crm',        crmRouter);        // Phase 3 CRM Module
 // app.use('/api/marketing',  marketingRouter);  // Phase 6
 // app.use('/api/hiring',     hiringRouter);     // Phase 10
 // app.use('/api/voice',      voiceRouter);      // Phase 13

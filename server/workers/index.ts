@@ -43,11 +43,29 @@ export function registerAllWorkers(): void {
   const whatsappWorker = new Worker(
     'whatsapp-outbound',
     async (job: Job) => {
-      const { to, message } = job.data;
+      const { to, message, provider, apiKey } = job.data;
       console.log(`[WhatsAppWorker] Sending message to ${to}`);
 
-      // TODO: Integrate with 360dialog / Twilio API
-      console.log(`[WhatsAppWorker] ✓ Message sent to ${to}`);
+      if (provider === '360dialog') {
+        const response = await fetch(`https://waba.360dialog.io/v1/messages`, {
+          method: 'POST',
+          headers: { 'D360-API-KEY': apiKey || '', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: to,
+            type: 'text',
+            text: { body: message },
+          }),
+        });
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`360dialog failed: ${response.status} ${errText}`);
+        }
+        console.log(`[WhatsAppWorker] ✓ Message sent via 360dialog to ${to}`);
+        return { delivered: true, to };
+      }
+
+      console.log(`[WhatsAppWorker] ✓ Fallback/Mock Message sent to ${to}`);
       return { delivered: true, to };
     },
     {
@@ -67,9 +85,11 @@ export function registerAllWorkers(): void {
       const { tenantId } = job.data;
       console.log(`[InvoiceWorker] Processing overdue invoices for tenant ${tenantId}`);
 
-      // TODO: Query overdue invoices, generate reminder drafts with agent
-      console.log(`[InvoiceWorker] ✓ Reminders processed for tenant ${tenantId}`);
-      return { processed: true, tenantId };
+      const { processOverdueInvoices } = await import('./invoiceOverdue.js');
+      const result = await processOverdueInvoices(tenantId);
+      
+      console.log(`[InvoiceWorker] ✓ Tenant ${tenantId}: ${result.markedOverdue} marked overdue, ${result.remindersQueued} reminders queued`);
+      return result;
     },
     {
       connection: redis,

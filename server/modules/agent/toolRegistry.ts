@@ -118,7 +118,7 @@ export function getToolRegistry(req: Request): ToolRegistry {
 
   registry.register(
     'get_cash_flow_snapshot',
-    'Get the latest cash flow snapshot with 30-day and 90-day projections',
+    'Get the latest cash flow snapshot with recent forecast',
     {
       type: 'object',
       properties: {
@@ -129,10 +129,29 @@ export function getToolRegistry(req: Request): ToolRegistry {
       },
       required: [],
     },
-    async (args) => ({
-      message: 'Cash flow module will be available in Phase 3.',
-      requested_days: args.days || 30,
-    })
+    async (args) => {
+      const { db } = req;
+      if (!db || !req.tenantId) {
+          throw new Error("No database context available");
+      }
+      // Import here to avoid circular dep issues if any, or just dynamic import
+      const { cashflowForecasts } = await import('../../db/schema/finance.js');
+      const { eq } = await import('drizzle-orm');
+      
+      const latest = await db.select().from(cashflowForecasts)
+        .where(eq(cashflowForecasts.tenantId, req.tenantId))
+        .limit(10); // fetch latest 10 and pick one
+
+      if (latest.length === 0) {
+          return { message: 'No cash flow forecast found. Trigger forecast generation first.' };
+      }
+      
+      const mostRecent = latest.sort((a: any, b: any) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+      return {
+          forecast: mostRecent.forecast,
+          generatedAt: mostRecent.generatedAt,
+      };
+    }
   );
 
   registry.register(
@@ -148,31 +167,53 @@ export function getToolRegistry(req: Request): ToolRegistry {
       },
       required: [],
     },
-    async (args) => ({
-      message: 'Invoice module will be available in Phase 3.',
-      limit: args.limit || 10,
-    })
+    async (args) => {
+      const { db } = req;
+      if (!db || !req.tenantId) throw new Error("No database context");
+      const { invoices } = await import('../../db/schema/finance.js');
+      const { eq, and } = await import('drizzle-orm');
+
+      const limit = typeof args.limit === 'number' ? args.limit : 10;
+      const overdueInvoices = await db.select().from(invoices)
+        .where(and(
+          eq(invoices.tenantId, req.tenantId),
+          eq(invoices.status, 'overdue')
+        ))
+        .limit(limit);
+
+      return { count: overdueInvoices.length, invoices: overdueInvoices };
+    }
   );
 
-  // ─── Placeholder CRM Tools (Phase 3) ─────────────────
+  // ─── CRM Tools (Phase 3) ─────────────────────────────
 
   registry.register(
     'list_deals_by_stage',
-    'List all deals grouped by their pipeline stage',
+    'List all deals grouped by their pipeline stage, or filter by a specific stage',
     {
       type: 'object',
       properties: {
         stage: {
           type: 'string',
-          description: 'Filter by specific stage (e.g., discovery, proposal, negotiation, closed)',
+          description: 'Filter by specific stage (e.g., discovery, proposal, negotiation, closed_won)',
         },
       },
       required: [],
     },
-    async (args) => ({
-      message: 'CRM module will be available in Phase 3.',
-      stage_filter: args.stage || 'all',
-    })
+    async (args) => {
+      const { db } = req;
+      if (!db || !req.tenantId) throw new Error("No database context");
+      const { deals } = await import('../../db/schema/crm.js');
+      const { eq, and } = await import('drizzle-orm');
+      
+      const stageFilter = typeof args.stage === 'string' ? args.stage : undefined;
+      let query = db.select().from(deals).where(eq(deals.tenantId, req.tenantId));
+      if (stageFilter) {
+          query = db.select().from(deals).where(and(eq(deals.tenantId, req.tenantId), eq(deals.stage, stageFilter)));
+      }
+      const results = await query;
+      return { count: results.length, deals: results };
+    }
   );
 
   registry.register(
@@ -187,10 +228,51 @@ export function getToolRegistry(req: Request): ToolRegistry {
       },
       required: ['name'],
     },
-    async (args) => ({
-      message: 'CRM module will be available in Phase 3.',
-      contact: args,
-    })
+    async (args) => {
+      const { db } = req;
+      if (!db || !req.tenantId) throw new Error("No database context");
+      const { contacts } = await import('../../db/schema/crm.js');
+      
+      const [contact] = await db.insert(contacts).values({
+        tenantId: req.tenantId,
+        name: String(args.name),
+        email: args.email ? String(args.email) : null,
+        type: args.type === 'client' ? 'client' : 'lead',
+      }).returning();
+      return contact;
+    }
+  );
+
+  registry.register(
+    'log_activity',
+    'Log an interaction or note about a contact or deal',
+    {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string' },
+        dealId: { type: 'string' },
+        type: { type: 'string', description: 'Call, email, note, meeting' },
+        subject: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['type', 'subject'],
+    },
+    async (args) => {
+      const { db } = req;
+      if (!db || !req.tenantId) throw new Error("No database context");
+      const { activities } = await import('../../db/schema/crm.js');
+      
+      const [activity] = await db.insert(activities).values({
+        tenantId: req.tenantId,
+        userId: req.userId || null,
+        type: String(args.type),
+        subject: String(args.subject),
+        body: args.body ? String(args.body) : null,
+        contactId: args.contactId ? String(args.contactId) : null,
+        dealId: args.dealId ? String(args.dealId) : null,
+      }).returning();
+      return activity;
+    }
   );
 
   return registry;

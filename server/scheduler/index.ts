@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import { Queue } from 'bullmq';
 import { db } from '../db/client.js';
 import { scheduledTasks } from '../db/schema/index.js';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { redis } from '../lib/redis.js';
 
 // BullMQ queues
@@ -14,6 +14,35 @@ const queues: Record<string, Queue> = {
 };
 
 /**
+ * Ensures that every active tenant has a default invoice-reminders job.
+ */
+async function ensureDefaultTasks(): Promise<void> {
+  const { tenants } = await import('../db/schema/core.js');
+  const allTenants = await db.select().from(tenants).where(eq(tenants.status, 'active'));
+
+  for (const t of allTenants) {
+    const existing = await db.select().from(scheduledTasks)
+      .where(
+        and(
+          eq(scheduledTasks.tenantId, t.id),
+          eq(scheduledTasks.taskType, 'invoice-reminders')
+        )
+      ).limit(1);
+
+    if (existing.length === 0) {
+      await db.insert(scheduledTasks).values({
+        tenantId: t.id,
+        taskType: 'invoice-reminders',
+        cronExpr: '0 9 * * *', // Daily at 9 AM
+        params: { reminderEmail: true, reminderWhatsapp: false },
+        active: true,
+      });
+      console.log(`[Scheduler] Created default invoice-reminders task for tenant ${t.id}`);
+    }
+  }
+}
+
+/**
  * Start the cron scheduler.
  * 1. Reads all active scheduled_tasks from the database
  * 2. Registers a cron job per tenant per task type
@@ -21,6 +50,8 @@ const queues: Record<string, Queue> = {
  */
 export async function startScheduler(): Promise<void> {
   try {
+    await ensureDefaultTasks();
+
     // Read active tasks from DB
     const tasks = await db
       .select()

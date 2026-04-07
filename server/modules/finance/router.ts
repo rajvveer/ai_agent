@@ -7,6 +7,8 @@ import {
   updateInvoice,
   deleteInvoice,
   getCashFlow,
+  generateForecast,
+  getLatestForecast,
 } from './controller.js';
 
 export const financeRouter = Router();
@@ -23,3 +25,5 @@ financeRouter.delete('/invoices/:id', deleteInvoice);
 
 // Cash flow
 financeRouter.get('/cash-flow', getCashFlow);
+financeRouter.post('/forecast', generateForecast);
+financeRouter.get('/forecast', getLatestForecast);

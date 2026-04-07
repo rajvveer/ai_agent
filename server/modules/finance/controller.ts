@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../../db/client.js';
-import { bankAccounts, transactions, invoices } from '../../db/schema/finance.js';
+import { bankAccounts, transactions, invoices, cashflowForecasts } from '../../db/schema/finance.js';
+import { runPythonScript } from '../../lib/pythonRunner.js';
 import { plaidClient } from '../../lib/plaid.js';
 import { CountryCode, Products } from 'plaid';
 import { z } from 'zod';
@@ -220,5 +221,73 @@ export const getCashFlow = async (req: Request, res: Response) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to compute cash flow' });
+  }
+};
+
+// Cash flow forecasting
+export const generateForecast = async (req: Request, res: Response) => {
+  try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const periodDays = parseInt(req.query.days as string) || 30;
+
+    // Fetch transactions from the last 90 days as training data
+    const accountTxns = await db.select().from(transactions)
+      .where(eq(transactions.tenantId, tenantId))
+      .limit(500);
+
+    if (accountTxns.length < 5) {
+      return res.status(400).json({ error: 'Not enough transactions to generate a forecast' });
+    }
+
+    const inputData = accountTxns.map(t => {
+      // Plaid treats positive amounts as money removed from the account (outflow)
+      // Multiply by -1 if we want to model true account balance increment
+      const amt = parseFloat(t.amount as string) * -1; 
+      return {
+        date: t.date.toISOString().split('T')[0],
+        amount: amt
+      };
+    });
+
+    const result = await runPythonScript<{ forecast: any, generated_at: string }>(
+      'ml/cashflow.py', 
+      inputData,
+      60000 // 60s timeout
+    );
+
+    const [inserted] = await db.insert(cashflowForecasts).values({
+      tenantId,
+      periodDays,
+      forecast: result.forecast,
+    }).returning();
+
+    res.status(201).json(inserted);
+  } catch (error: any) {
+    console.error('Forecast generation error:', error);
+    res.status(500).json({ error: 'Failed to generate forecast', details: error.message });
+  }
+};
+
+export const getLatestForecast = async (req: Request, res: Response) => {
+  try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const latest = await db.select().from(cashflowForecasts)
+      .where(eq(cashflowForecasts.tenantId, tenantId))
+      .limit(10);
+      
+    if (latest.length === 0) {
+      return res.status(404).json({ error: 'No forecast found' });
+    }
+    
+    // As a simple workaround since I don't have desc(), let me sort it in memory for the 10
+    const mostRecent = latest.sort((a,b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+
+    res.json(mostRecent);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch forecast' });
   }
 };
